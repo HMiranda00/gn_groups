@@ -1,15 +1,21 @@
+# GN Groups  
 
-# GN Groups
+## Overview  
+GN Groups is a smarter, snappier way to handle object groups in Blender—powered by Geometry Nodes. It builds on Blender's collection system but with some extra magic to make your workflow smoother and more intuitive.  
 
-## Overview
-GN Groups is an advanced grouping addon for Blender that uses Geometry Nodes to create and manage object groups with extended functionality beyond Blender's standard collection system.
+## Features  
 
-## Features
-- **Smart grouping**: Create groups from selected objects while preserving all relative transformations
-- **Nested groups**: Support for groups within groups, creating complex hierarchies
-- **Group editing**: Easily enter a group's edit mode to modify its components
-- **Group instancing**: Each group functions as an instance with Geometry Nodes
-- **Materials**: Automatic preservation of materials between group instances
+### Easy grouping:  
+Select some objects, hit the button, and boom—instant group, keeping all transformations intact. Each group acts like an instance wrapped in a Geometry Nodes setup. Behind the scenes, we’re just tossing everything into a hidden collection and letting GN do the heavy lifting. The best part? You can stack as many modifiers on top as you want—go wild!  
+
+<img src="https://i.imgur.com/x1bBTN0.gif" width="500">
+<img src="https://i.imgur.com/9tRJGQl.gif" width="500">  
+
+### Group editing:  
+Need to tweak a group? Just press `Tab` to jump into edit mode and adjust whatever you want, right in the scene. Changes apply to all instances of the group, so no need for tedious manual updates.  
+
+### Nested groups:  
+Groups inside groups? No problem. Stack them up, mix and match, and even swap materials on the fly—without diving into edit mode. And yes, this still works even if you throw in new objects or materials later!  
 
 ## Compatibility
 - Blender 2.80 or higher
