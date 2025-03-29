@@ -5,6 +5,12 @@ from bpy.props import StringProperty, BoolProperty, EnumProperty, CollectionProp
 from mathutils import Vector, Matrix
 import os
 
+# Importar o sistema de gizmos para grupos
+try:
+    import gn_groups_gizmo
+except ImportError:
+    pass
+
 # Definir lista global para armazenar keymaps do addon
 addon_keymaps = []
 
@@ -1942,8 +1948,20 @@ def register():
         # Adicionar o atalho Ctrl+Shift+G para desagrupar
         kmi = km.keymap_items.new(GROUP_OT_quick_ungroup.bl_idname, 'G', 'PRESS', ctrl=True, shift=True)
         addon_keymaps.append((km, kmi))
+    
+    # Registrar os gizmos
+    try:
+        gn_groups_gizmo.register()
+    except Exception as e:
+        print(f"Erro ao registrar gizmos: {e}")
 
 def unregister():
+    # Desregistrar os gizmos
+    try:
+        gn_groups_gizmo.unregister()
+    except Exception as e:
+        print(f"Erro ao desregistrar gizmos: {e}")
+        
     for km, kmi in addon_keymaps:
         km.keymap_items.remove(kmi)
     addon_keymaps.clear()
