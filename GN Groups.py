@@ -246,8 +246,15 @@ class GROUP_OT_create_group(Operator):
 
         # Move objects to new collection and adjust their positions
         for obj in selected_objects:
-            if obj.name in context.collection.objects:
-                context.collection.objects.unlink(obj)
+            # Desvincular o objeto de todas as collections atuais
+            for collection in list(bpy.data.collections):
+                if obj.name in collection.objects:
+                    collection.objects.unlink(obj)
+            # Desvincular da coleção da cena também, se estiver lá
+            if obj.name in context.scene.collection.objects:
+                context.scene.collection.objects.unlink(obj)
+                
+            # Agora vincular à nova coleção do grupo
             new_collection.objects.link(obj)
             
             # Calculate the offset from the center
@@ -501,9 +508,16 @@ class GROUP_OT_ungroup(Operator):
             # podemos remover completamente o grupo
             if not has_other_instances and len(active_group_collection.objects) == 0:
                 bpy.data.objects.remove(group_obj)
-                bpy.data.collections.remove(active_group_collection)
+                # Armazenar o nome da coleção antes de removê-la
+                collection_name = active_group_collection.name
+                # Limpar referências
+                active_group_collection = None
+                # Remover a coleção pelo nome
+                bpy.data.collections.remove(bpy.data.collections.get(collection_name))
                 
-            self.report({'INFO'}, "Objetos desagrupados com sucesso")
+                self.report({'INFO'}, f"Group '{collection_name}' ungrouped successfully")
+            else:
+                self.report({'INFO'}, f"Group '{active_group_collection.name}' ungrouped successfully")
             return {'FINISHED'}
         else:
             # Comportamento padrão: desagrupar o grupo inteiro
@@ -560,13 +574,14 @@ class GROUP_OT_ungroup(Operator):
                         if slot.material.name not in new_obj.data.materials:
                             new_obj.data.materials.append(slot.material)
                             
-                # Link to current collection
+                # Link to target collection
                 target_collection.objects.link(new_obj)
                 
                 # Apply transformations (group transformation + relative object position)
                 new_obj.matrix_world = group_matrix @ obj.matrix_world
                 
                 new_objects.append(new_obj)
+                all_new_objects.append(new_obj)  # Adicionar à lista global um por um
                 
             # Select newly created objects
             bpy.ops.object.select_all(action='DESELECT')
@@ -577,7 +592,7 @@ class GROUP_OT_ungroup(Operator):
             # Verificar se existem outras instâncias deste grupo
             has_other_instances = False
             for obj in context.view_layer.objects:
-                if obj != active_obj and any(f"gng_" in mod.name for mod in obj.modifiers):
+                if obj is not None and obj != active_obj and obj.modifiers and any(f"gng_" in mod.name for mod in obj.modifiers):
                     for mod in obj.modifiers:
                         if f"gng_" in mod.name and mod.type == 'NODES':
                             collection_socket = None
@@ -597,9 +612,16 @@ class GROUP_OT_ungroup(Operator):
             
             # Se for a última instância, remover a coleção também
             if not has_other_instances:
-                bpy.data.collections.remove(group_collection)
-            
-            self.report({'INFO'}, "Grupo desagrupado com sucesso")
+                # Armazenar o nome da coleção para relatório
+                group_collection_name = group_collection.name
+                # Limpar qualquer referência à coleção antes de removê-la
+                group_collection = None
+                # Agora remover a coleção pelo nome
+                bpy.data.collections.remove(bpy.data.collections.get(group_collection_name))
+                
+                self.report({'INFO'}, f"Group '{group_collection_name}' ungrouped successfully")
+            else:
+                self.report({'INFO'}, f"Group '{group_collection.name}' ungrouped successfully")
             return {'FINISHED'}
 
 class GROUP_OT_rename(Operator):
@@ -673,6 +695,23 @@ class GROUP_OT_toggle_edit_mode(Operator):
     bl_label = "Toggle Group Edit Mode"
     bl_options = {'REGISTER', 'UNDO'}
     bl_description = "Enter or exit edit mode for groups"
+
+    @classmethod
+    def poll(cls, context):
+        # Em modo de visualização local sempre habilitar (para permitir sair do modo de edição)
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                if hasattr(area.spaces[0], 'local_view') and area.spaces[0].local_view:
+                    return True
+        
+        # Se estamos fora do modo de visualização local, verificar se há pelo menos um grupo selecionado
+        # Isso permite a edição de vários grupos de uma só vez
+        if context.active_object and any(f"gng_" in mod.name for mod in context.active_object.modifiers):
+            # Se o objeto ativo é um grupo, permitir a edição
+            return True
+            
+        # Nenhum grupo selecionado/ativo, seguir comportamento padrão do Blender para TAB
+        return False
 
     def execute(self, context):
         # Check preferences to determine storage method
@@ -848,28 +887,38 @@ class GROUP_OT_toggle_edit_mode(Operator):
                 groups_collection = bpy.data.collections.get("GNGroups")
                 if groups_collection:
                     groups_layer_collection = None
+                    group_layer_collection = None
+                    
                     for layer_coll in view_layer.layer_collection.children:
                         if layer_coll.collection == groups_collection:
                             groups_layer_collection = layer_coll
-                            break
+                            groups_layer_collection.exclude = False
                             
-                    if groups_layer_collection:
-                        for child_layer_coll in groups_layer_collection.children:
-                            if child_layer_coll.collection == nested_collection:
-                                child_layer_coll.exclude = False
-                                break
-                
-                # Select the objects in the nested group
-                bpy.ops.object.select_all(action='DESELECT')
-                for obj in nested_collection.objects:
-                    obj.select_set(True)
-                context.view_layer.objects.active = next(iter(nested_collection.objects), None)
-                
-                # Exit current local view and enter a new one to focus on the nested group
-                bpy.ops.view3d.localview()  # Exit current
-                bpy.ops.view3d.localview()  # Enter new local view with newly selected objects
-                
-                return {'FINISHED'}
+                            # Procurar a layer_collection para a collection do grupo
+                            for child_layer_coll in groups_layer_collection.children:
+                                if child_layer_coll.collection == nested_collection:
+                                    child_layer_coll.exclude = False
+                                    group_layer_collection = child_layer_coll
+                                else:
+                                    child_layer_coll.exclude = True
+                            break
+                    
+                    # Ativar a collection do grupo para que novos objetos sejam adicionados a ela
+                    if group_layer_collection:
+                        # Definir a collection do grupo como ativa
+                        context.view_layer.active_layer_collection = group_layer_collection
+                    
+                    # Select the objects in the group
+                    bpy.ops.object.select_all(action='DESELECT')
+                    for obj in nested_collection.objects:
+                        obj.select_set(True)
+                    context.view_layer.objects.active = next(iter(nested_collection.objects), None)
+                    
+                    # Exit current local view and enter a new one to focus on the nested group
+                    bpy.ops.view3d.localview()  # Exit current
+                    bpy.ops.view3d.localview()  # Enter new local view with newly selected objects
+                    
+                    return {'FINISHED'}
             else:
                 # Se não for grupo e tiver selecionado, deixe o comportamento padrão do TAB em objetos
                 if not any(obj for obj in context.selected_objects if any(f"gng_" in mod.name for mod in obj.modifiers)):
@@ -928,37 +977,58 @@ class GROUP_OT_toggle_edit_mode(Operator):
         else:
             # We're in main scene
             active_obj = context.active_object
-            if active_obj and any(f"gng_" in mod.name for mod in active_obj.modifiers):
-                # Active object is a group, so edit it
-                group_name = active_obj.name
+            # Verificar se temos pelo menos um grupo selecionado e o objeto ativo é um grupo
+            selected_group_objects = [obj for obj in context.selected_objects if any(f"gng_" in mod.name for mod in obj.modifiers)]
+            
+            if active_obj and any(f"gng_" in mod.name for mod in active_obj.modifiers) and selected_group_objects:
+                # Tem pelo menos um grupo selecionado e o objeto ativo é um grupo
                 
-                # Find the GN modifier
-                gn_modifier = None
+                # Coletar todas as collections de grupos selecionados
+                group_collections = []
+                group_layer_collections = []
+                
+                for group_obj in selected_group_objects:
+                    # Find the GN modifier
+                    gn_modifier = None
+                    for mod in group_obj.modifiers:
+                        if f"gng_" in mod.name and mod.type == 'NODES':
+                            gn_modifier = mod
+                            break
+                    
+                    if not gn_modifier or not gn_modifier.node_group:
+                        continue
+                    
+                    # Find the collection input socket
+                    collection_socket = None
+                    for input in gn_modifier.node_group.interface.items_tree:
+                        if input.bl_socket_idname == 'NodeSocketCollection':
+                            collection_socket = input
+                            break
+                    
+                    if not collection_socket:
+                        continue
+                    
+                    # Get the group collection
+                    group_collection = gn_modifier[collection_socket.identifier]
+                    if group_collection and group_collection not in group_collections:
+                        group_collections.append(group_collection)
+                
+                # Se não encontramos collections válidas, sair
+                if not group_collections:
+                    self.report({'WARNING'}, "No valid group collections found")
+                    return {'CANCELLED'}
+                
+                # Obter a collection do grupo ativo (para definir como collection ativa)
+                active_group_collection = None
                 for mod in active_obj.modifiers:
                     if f"gng_" in mod.name and mod.type == 'NODES':
-                        gn_modifier = mod
-                        break
-                
-                if not gn_modifier or not gn_modifier.node_group:
-                    self.report({'WARNING'}, "Invalid group modifier")
-                    return {'CANCELLED'}
-                
-                # Find the collection input socket
-                collection_socket = None
-                for input in gn_modifier.node_group.interface.items_tree:
-                    if input.bl_socket_idname == 'NodeSocketCollection':
-                        collection_socket = input
-                        break
-                
-                if not collection_socket:
-                    self.report({'WARNING'}, "Could not find collection in node group")
-                    return {'CANCELLED'}
-                
-                # Get the group collection
-                group_collection = gn_modifier[collection_socket.identifier]
-                if not group_collection:
-                    self.report({'WARNING'}, "Group collection not found")
-                    return {'CANCELLED'}
+                        for input in mod.node_group.interface.items_tree:
+                            if input.bl_socket_idname == 'NodeSocketCollection':
+                                collection_socket = input
+                                active_group_collection = mod[collection_socket.identifier]
+                                break
+                        if active_group_collection:
+                            break
                 
                 if preferences.use_separate_scene:
                     # Legacy mode - go to separate scene
@@ -969,18 +1039,26 @@ class GROUP_OT_toggle_edit_mode(Operator):
 
                     context.window.scene = groups_scene
                     
-                    if group_collection:
-                        bpy.ops.object.select_all(action='DESELECT')
+                    # Select all objects from all group collections
+                    bpy.ops.object.select_all(action='DESELECT')
+                    active_obj_in_groups = None
+                    
+                    for group_collection in group_collections:
                         for obj in group_collection.objects:
                             obj.select_set(True)
-                        groups_scene.view_layers[0].objects.active = next(iter(group_collection.objects), None)
-                        bpy.ops.view3d.localview()
-                    else:
-                        self.report({'WARNING'}, f"Group collection '{group_name}' not found")
-                        return {'CANCELLED'}
+                            if not active_obj_in_groups:
+                                active_obj_in_groups = obj
+                    
+                    # Set active object from any of the collections
+                    if active_obj_in_groups:
+                        groups_scene.view_layers[0].objects.active = active_obj_in_groups
+                    
+                    # Enter local view
+                    bpy.ops.view3d.localview()
+                    
                 else:
                     # New mode - use local view in current scene
-                    # First make the GNGroups collection and only the target group collection visible temporarily
+                    # First make the GNGroups collection and only the target group collections visible temporarily
                     groups_collection = bpy.data.collections.get("GNGroups")
                     if groups_collection:
                         # Store original visibility states
@@ -991,8 +1069,8 @@ class GROUP_OT_toggle_edit_mode(Operator):
                         
                         # Set group collection visibility
                         for child_collection in groups_collection.children:
-                            # Hide all collections except the one we're editing
-                            if child_collection == group_collection:
+                            # Hide all collections except the ones we're editing
+                            if child_collection in group_collections:
                                 child_collection.hide_viewport = False
                             else:
                                 child_collection.hide_viewport = True
@@ -1000,28 +1078,41 @@ class GROUP_OT_toggle_edit_mode(Operator):
                         # Update view layer exclude settings
                         view_layer = context.view_layer
                         groups_layer_collection = None
+                        active_group_layer_collection = None
+                        
                         for layer_coll in view_layer.layer_collection.children:
                             if layer_coll.collection == groups_collection:
                                 groups_layer_collection = layer_coll
                                 groups_layer_collection.exclude = False
+                                
+                                # Procurar as layer_collections para as collections dos grupos
+                                for child_layer_coll in groups_layer_collection.children:
+                                    if child_layer_coll.collection in group_collections:
+                                        child_layer_coll.exclude = False
+                                        # Se for a collection do grupo ativo, guardar referência
+                                        if child_layer_coll.collection == active_group_collection:
+                                            active_group_layer_collection = child_layer_coll
+                                    else:
+                                        child_layer_coll.exclude = True
                                 break
                         
-                        if groups_layer_collection:
-                            for child_layer_coll in groups_layer_collection.children:
-                                if child_layer_coll.collection == group_collection:
-                                    child_layer_coll.exclude = False
-                                else:
-                                    child_layer_coll.exclude = True
+                        # Ativar a collection do grupo ativo para que novos objetos sejam adicionados a ela
+                        if active_group_layer_collection:
+                            # Definir a collection do grupo ativo como a collection ativa
+                            context.view_layer.active_layer_collection = active_group_layer_collection
                         
-                        # Select the objects in the group
+                        # Remover lógica de manter seleção atual, apenas selecionar objetos dos grupos
                         bpy.ops.object.select_all(action='DESELECT')
-                        for obj in group_collection.objects:
-                            obj.select_set(True)
                         
-                        # Set active object from the group
-                        context.view_layer.objects.active = next(iter(group_collection.objects), None)
+                        # Selecionar todos os objetos dos grupos
+                        for group_collection in group_collections:
+                            for obj in group_collection.objects:
+                                obj.select_set(True)
                         
-                        # Enter local view
+                        # Garantir que o objeto ativo seja o grupo ativo
+                        context.view_layer.objects.active = active_obj
+                        
+                        # Enter local view com todos os objetos selecionados
                         bpy.ops.view3d.localview()
                     else:
                         self.report({'WARNING'}, "GNGroups collection not found")
@@ -1624,23 +1715,31 @@ class GROUP_OT_list_action(Operator):
                                     child_collection.hide_viewport = False
                                 else:
                                     child_collection.hide_viewport = True
-                                    
+                                
                             # Update view layer exclude settings
                             view_layer = context.view_layer
                             groups_layer_collection = None
+                            group_layer_collection = None
+                            
                             for layer_coll in view_layer.layer_collection.children:
                                 if layer_coll.collection == groups_collection:
                                     groups_layer_collection = layer_coll
                                     groups_layer_collection.exclude = False
+                                    
+                                    # Procurar a layer_collection para a collection do grupo
+                                    for child_layer_coll in groups_layer_collection.children:
+                                        if child_layer_coll.collection == group_collection:
+                                            child_layer_coll.exclude = False
+                                            group_layer_collection = child_layer_coll
+                                        else:
+                                            child_layer_coll.exclude = True
                                     break
                             
-                            if groups_layer_collection:
-                                for child_layer_coll in groups_layer_collection.children:
-                                    if child_layer_coll.collection == group_collection:
-                                        child_layer_coll.exclude = False
-                                    else:
-                                        child_layer_coll.exclude = True
-                        
+                            # Ativar a collection do grupo para que novos objetos sejam adicionados a ela
+                            if group_layer_collection:
+                                # Definir a collection do grupo como ativa
+                                context.view_layer.active_layer_collection = group_layer_collection
+                            
                             # Select the objects in the group
                             bpy.ops.object.select_all(action='DESELECT')
                             for obj in group_collection.objects:
@@ -1733,10 +1832,11 @@ class GROUP_OT_list_action(Operator):
                         # Link to target collection
                         target_collection.objects.link(new_obj)
                         
-                        # Apply transformations (group + relative object position)
+                        # Apply transformations (group transformation + relative object position)
                         new_obj.matrix_world = group_matrix @ obj.matrix_world
                         
                         new_objects.append(new_obj)
+                        all_new_objects.append(new_obj)  # Adicionar à lista global um por um
                         
                     # Select newly created objects
                     bpy.ops.object.select_all(action='DESELECT')
@@ -1747,7 +1847,7 @@ class GROUP_OT_list_action(Operator):
                     # Verificar se existem outras instâncias deste grupo
                     has_other_instances = False
                     for obj in context.view_layer.objects:
-                        if obj != group_obj and any(f"gng_" in mod.name for mod in obj.modifiers):
+                        if obj is not None and obj != group_obj and obj.modifiers and any(f"gng_" in mod.name for mod in obj.modifiers):
                             for mod in obj.modifiers:
                                 if f"gng_" in mod.name and mod.type == 'NODES':
                                     collection_socket = None
@@ -1767,9 +1867,16 @@ class GROUP_OT_list_action(Operator):
                     
                     # Se for a última instância, remover a coleção também
                     if not has_other_instances:
-                        bpy.data.collections.remove(group_collection)
+                        # Armazenar o nome da coleção para relatório
+                        group_collection_name = group_collection.name
+                        # Limpar qualquer referência à coleção antes de removê-la
+                        group_collection = None
+                        # Agora remover a coleção pelo nome
+                        bpy.data.collections.remove(bpy.data.collections.get(group_collection_name))
                         
-                    self.report({'INFO'}, f"Group '{group_collection.name}' ungrouped successfully")
+                        self.report({'INFO'}, f"Group '{group_collection_name}' ungrouped successfully")
+                    else:
+                        self.report({'INFO'}, f"Group '{group_collection.name}' ungrouped successfully")
                 else:
                     self.report({'WARNING'}, f"Could not find group object for '{group_collection.name}'")
                     return {'CANCELLED'}
@@ -1817,6 +1924,7 @@ def register():
     bpy.utils.register_class(GROUP_OT_list_action)
     bpy.utils.register_class(GROUP_OT_toggle_nested_groups)
     bpy.utils.register_class(GROUP_OT_extract_nested_group)
+    bpy.utils.register_class(GROUP_OT_quick_ungroup)
     bpy.utils.register_class(VIEW3D_PT_grouping_tools)
     bpy.utils.register_class(SCENE_PT_grouping_tools)
     
@@ -1830,6 +1938,9 @@ def register():
         kmi = km.keymap_items.new(GROUP_OT_create_group.bl_idname, 'G', 'PRESS', ctrl=True)
         addon_keymaps.append((km, kmi))
         kmi = km.keymap_items.new(GROUP_OT_toggle_edit_mode.bl_idname, 'TAB', 'PRESS')
+        addon_keymaps.append((km, kmi))
+        # Adicionar o atalho Ctrl+Shift+G para desagrupar
+        kmi = km.keymap_items.new(GROUP_OT_quick_ungroup.bl_idname, 'G', 'PRESS', ctrl=True, shift=True)
         addon_keymaps.append((km, kmi))
 
 def unregister():
@@ -1848,6 +1959,7 @@ def unregister():
     bpy.utils.unregister_class(GROUP_OT_ungroup)
     bpy.utils.unregister_class(GROUP_OT_toggle_edit_mode)
     bpy.utils.unregister_class(GROUP_OT_create_group)
+    bpy.utils.unregister_class(GROUP_OT_quick_ungroup)
     bpy.utils.unregister_class(GNGroupsPreferences)
     
     unregister_active_group_index()
@@ -1942,6 +2054,286 @@ class GROUP_OT_extract_nested_group(Operator):
             
         except Exception as e:
             self.report({'ERROR'}, f"Error extracting nested group: {str(e)}")
+            return {'CANCELLED'}
+
+class GROUP_OT_quick_ungroup(Operator):
+    bl_idname = "object.quick_ungroup"
+    bl_label = "Quick Ungroup"
+    bl_options = {'REGISTER', 'UNDO'}
+    bl_description = "Rápido desagrupamento com atalho de teclado"
+
+    @classmethod
+    def poll(cls, context):
+        # Em modo de edição local, permitimos desagrupar objetos selecionados
+        is_in_local_view = False
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                if hasattr(area.spaces[0], 'local_view') and area.spaces[0].local_view:
+                    is_in_local_view = True
+                    break
+                    
+        if is_in_local_view:
+            # Em modo de edição, permitir desde que haja objetos selecionados
+            return len(context.selected_objects) > 0
+        
+        # Verificar se existe pelo menos um grupo selecionado
+        selected_group_objects = [obj for obj in context.selected_objects if any(f"gng_" in mod.name for mod in obj.modifiers)]
+        return len(selected_group_objects) > 0 and context.active_object in selected_group_objects
+
+    def execute(self, context):
+        # Verificar se estamos em modo de edição (visualização local)
+        is_in_local_view = False
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                if hasattr(area.spaces[0], 'local_view') and area.spaces[0].local_view:
+                    is_in_local_view = True
+                    break
+                    
+        # Comportamento diferente se estiver em modo de edição local
+        if is_in_local_view and context.selected_objects:
+            # Estamos em modo de edição e há objetos selecionados
+            # Desagrupar os objetos selecionados do grupo em edição
+            
+            # Primeiro, precisamos encontrar qual é o grupo sendo editado
+            active_group_collection = None
+            storage_scene, groups_collection = get_gngroups_storage(context, create=False)
+            if not groups_collection:
+                self.report({'WARNING'}, "Coleção de grupos não encontrada")
+                return {'CANCELLED'}
+                
+            # Tentar identificar qual coleção de grupo está sendo editada
+            # baseando-se nos objetos selecionados
+            for coll in groups_collection.children:
+                for obj in context.selected_objects:
+                    if obj.name in coll.objects:
+                        active_group_collection = coll
+                        break
+                if active_group_collection:
+                    break
+                    
+            if not active_group_collection:
+                self.report({'WARNING'}, "Não foi possível identificar o grupo em edição")
+                return {'CANCELLED'}
+            
+            # Encontrar o objeto do grupo na cena
+            group_obj = None
+            for obj in context.view_layer.objects:
+                if any(f"gng_" in mod.name for mod in obj.modifiers):
+                    for mod in obj.modifiers:
+                        if f"gng_" in mod.name and mod.type == 'NODES':
+                            collection_socket = None
+                            for input in mod.node_group.interface.items_tree:
+                                if input.bl_socket_idname == 'NodeSocketCollection':
+                                    collection_socket = input
+                                    break
+                                    
+                            if collection_socket and mod[collection_socket.identifier] == active_group_collection:
+                                group_obj = obj
+                                break
+                if group_obj:
+                    break
+                    
+            if not group_obj:
+                self.report({'WARNING'}, "Objeto de grupo não encontrado")
+                return {'CANCELLED'}
+            
+            # Verificar se existem outras instâncias deste grupo
+            has_other_instances = False
+            for obj in context.view_layer.objects:
+                if obj is not None and obj != group_obj and obj.modifiers and any(f"gng_" in mod.name for mod in obj.modifiers):
+                    for mod in obj.modifiers:
+                        if f"gng_" in mod.name and mod.type == 'NODES':
+                            collection_socket = None
+                            for input in mod.node_group.interface.items_tree:
+                                if input.bl_socket_idname == 'NodeSocketCollection':
+                                    collection_socket = input
+                                    break
+                                    
+                            if collection_socket and mod[collection_socket.identifier] == active_group_collection:
+                                has_other_instances = True
+                                break
+                if has_other_instances:
+                    break
+            
+            # Get transformation matrix of the group object
+            group_matrix = group_obj.matrix_world.copy()
+            
+            # Obter a coleção onde os objetos desagrupados serão movidos
+            # Será a coleção do usuário atual, fora da coleção GNGroups
+            target_collection = context.scene.collection
+            for coll in context.view_layer.layer_collection.children:
+                if coll.collection != groups_collection and coll.collection.library is None:
+                    # Encontrar a primeira coleção visível que não é a GNGroups
+                    if not coll.exclude:
+                        target_collection = coll.collection
+                        break
+            
+            # Se houver mais instâncias, criar cópias e mover
+            # Caso contrário, mover diretamente
+            selected_objects = context.selected_objects.copy()
+            for obj in selected_objects:
+                if obj.name in active_group_collection.objects:
+                    if has_other_instances:
+                        # Criar uma cópia
+                        new_obj = obj.copy()
+                        if obj.data:
+                            new_obj.data = obj.data.copy()
+                            
+                        # Aplicar materiais
+                        for slot in obj.material_slots:
+                            if slot.material:
+                                if slot.material.name not in new_obj.data.materials:
+                                    new_obj.data.materials.append(slot.material)
+                                    
+                        # Aplicar transformações (grupo + posição relativa do objeto)
+                        new_obj.matrix_world = group_matrix @ obj.matrix_world
+                        
+                        # Adicionar à coleção alvo
+                        target_collection.objects.link(new_obj)
+                    else:
+                        # Caso não haja outras instâncias, mover diretamente
+                        # Remover da coleção atual
+                        active_group_collection.objects.unlink(obj)
+                        
+                        # Aplicar transformações
+                        obj.matrix_world = group_matrix @ obj.matrix_world
+                        
+                        # Adicionar à coleção alvo
+                        target_collection.objects.link(obj)
+            
+            # Se não houver outras instâncias e não sobrar nenhum objeto no grupo,
+            # podemos remover completamente o grupo
+            if not has_other_instances and len(active_group_collection.objects) == 0:
+                bpy.data.objects.remove(group_obj)
+                # Armazenar o nome da coleção antes de removê-la
+                collection_name = active_group_collection.name
+                # Limpar referências
+                active_group_collection = None
+                # Remover a coleção pelo nome
+                bpy.data.collections.remove(bpy.data.collections.get(collection_name))
+                
+                self.report({'INFO'}, f"Group '{collection_name}' ungrouped successfully")
+            else:
+                self.report({'INFO'}, f"Group '{active_group_collection.name}' ungrouped successfully")
+            
+            return {'FINISHED'}
+        
+        # Código para desagrupar grupos quando não estamos em modo de edição local
+        # Verificar se há grupos selecionados
+        selected_group_objects = [obj for obj in context.selected_objects 
+                                if obj is not None and obj.modifiers and 
+                                any(f"gng_" in mod.name for mod in obj.modifiers)]
+        
+        if not selected_group_objects:
+            # Sem grupos selecionados, manter comportamento padrão
+            return {'PASS_THROUGH'}
+            
+        # Desagrupar cada grupo selecionado
+        ungrouped_count = 0
+        all_new_objects = []  # Lista para armazenar todos os novos objetos criados
+        
+        for active_obj in selected_group_objects:
+            # Get the group modifier
+            gn_modifier = None
+            for mod in active_obj.modifiers:
+                if f"gng_" in mod.name and mod.type == 'NODES':
+                    gn_modifier = mod
+                    break
+                    
+            if not gn_modifier or not gn_modifier.node_group:
+                continue
+                
+            # Find the collection input socket
+            collection_socket = None
+            for input in gn_modifier.node_group.interface.items_tree:
+                if input.bl_socket_idname == 'NodeSocketCollection':
+                    collection_socket = input
+                    break
+                    
+            if not collection_socket:
+                continue
+                
+            # Get the group collection
+            group_collection = gn_modifier[collection_socket.identifier]
+            if not group_collection:
+                continue
+                
+            # Get transformation matrix of the group object
+            group_matrix = active_obj.matrix_world.copy()
+            
+            # Obter a coleção alvo - usar a coleção atual do contexto
+            target_collection = context.collection
+            
+            # Create duplicates of all objects in the group at the current position
+            group_new_objects = []  # Lista temporária para objetos deste grupo
+            
+            for obj in group_collection.objects:
+                # Create a duplicate
+                new_obj = obj.copy()
+                if obj.data:
+                    new_obj.data = obj.data.copy()
+                    
+                # Apply materials
+                for slot in obj.material_slots:
+                    if slot.material:
+                        if slot.material.name not in new_obj.data.materials:
+                            new_obj.data.materials.append(slot.material)
+                            
+                # Link to target collection
+                target_collection.objects.link(new_obj)
+                
+                # Apply transformations (group transformation + relative object position)
+                new_obj.matrix_world = group_matrix @ obj.matrix_world
+                
+                # Adicionar à lista temporária e à lista global
+                group_new_objects.append(new_obj)
+                all_new_objects.append(new_obj)
+                
+            # Verificar se existem outras instâncias deste grupo
+            has_other_instances = False
+            for obj in context.view_layer.objects:
+                if obj is not None and obj != active_obj and obj.modifiers and any(f"gng_" in mod.name for mod in obj.modifiers):
+                    for mod in obj.modifiers:
+                        if f"gng_" in mod.name and mod.type == 'NODES':
+                            collection_socket = None
+                            for input in mod.node_group.interface.items_tree:
+                                if input.bl_socket_idname == 'NodeSocketCollection':
+                                    collection_socket = input
+                                    break
+                                    
+                            if collection_socket and mod[collection_socket.identifier] == group_collection:
+                                has_other_instances = True
+                                break
+                if has_other_instances:
+                    break
+            
+            # Remove the group instance
+            group_name = active_obj.name
+            bpy.data.objects.remove(active_obj)
+            
+            # Se for a última instância, remover a coleção também
+            if not has_other_instances:
+                # Armazenar o nome da coleção para relatório
+                group_collection_name = group_collection.name
+                # Limpar qualquer referência à coleção antes de removê-la
+                group_collection = None
+                # Agora remover a coleção pelo nome
+                bpy.data.collections.remove(bpy.data.collections.get(group_collection_name))
+            
+            ungrouped_count += 1
+        
+        # Select newly created objects after processing all groups
+        if all_new_objects:
+            bpy.ops.object.select_all(action='DESELECT')
+            for obj in all_new_objects:
+                obj.select_set(True)
+            context.view_layer.objects.active = all_new_objects[0]
+        
+        if ungrouped_count > 0:
+            self.report({'INFO'}, f"{ungrouped_count} grupos desagrupados com sucesso")
+            return {'FINISHED'}
+        else:
+            self.report({'WARNING'}, "Nenhum grupo válido para desagrupar")
             return {'CANCELLED'}
 
 if __name__ == "__main__":
