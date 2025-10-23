@@ -254,10 +254,10 @@ class GROUP_OT_create_group(Operator):
         for obj in selected_objects:
             # Desvincular o objeto de todas as collections atuais
             for collection in list(bpy.data.collections):
-                if obj in collection.objects:
+                if obj.name in collection.objects:
                     collection.objects.unlink(obj)
             # Desvincular da coleção da cena também, se estiver lá
-            if obj in context.scene.collection.objects:
+            if obj.name in context.scene.collection.objects:
                 context.scene.collection.objects.unlink(obj)
                 
             # Agora vincular à nova coleção do grupo
@@ -414,7 +414,7 @@ class GROUP_OT_ungroup(Operator):
             # baseando-se nos objetos selecionados
             for coll in groups_collection.children:
                 for obj in context.selected_objects:
-                    if obj in coll.objects:
+                    if obj.name in coll.objects:
                         active_group_collection = coll
                         break
                 if active_group_collection:
@@ -481,7 +481,7 @@ class GROUP_OT_ungroup(Operator):
             # Caso contrário, mover diretamente
             selected_objects = context.selected_objects.copy()
             for obj in selected_objects:
-                if obj in active_group_collection.objects:
+                if obj.name in active_group_collection.objects:
                     if has_other_instances:
                         # Criar uma cópia
                         new_obj = obj.copy()
@@ -1229,7 +1229,7 @@ class GROUP_UL_collections(bpy.types.UIList):
                 selected_objs = context.selected_objects
                 if selected_objs:
                     for obj in selected_objs:
-                        if obj in item.objects:
+                        if obj.name in item.objects:
                             is_active_group = True
                             break
         
@@ -2123,7 +2123,7 @@ class GROUP_OT_quick_ungroup(Operator):
             # baseando-se nos objetos selecionados
             for coll in groups_collection.children:
                 for obj in context.selected_objects:
-                    if obj in coll.objects:
+                    if obj.name in coll.objects:
                         active_group_collection = coll
                         break
                 if active_group_collection:
@@ -2190,7 +2190,7 @@ class GROUP_OT_quick_ungroup(Operator):
             # Caso contrário, mover diretamente
             selected_objects = context.selected_objects.copy()
             for obj in selected_objects:
-                if obj in active_group_collection.objects:
+                if obj.name in active_group_collection.objects:
                     if has_other_instances:
                         # Criar uma cópia
                         new_obj = obj.copy()
