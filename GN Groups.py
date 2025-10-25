@@ -587,7 +587,6 @@ class GROUP_OT_ungroup(Operator):
                 new_obj.matrix_world = group_matrix @ obj.matrix_world
                 
                 new_objects.append(new_obj)
-                all_new_objects.append(new_obj)  # Adicionar à lista global um por um
                 
             # Select newly created objects
             bpy.ops.object.select_all(action='DESELECT')
@@ -1842,7 +1841,6 @@ class GROUP_OT_list_action(Operator):
                         new_obj.matrix_world = group_matrix @ obj.matrix_world
                         
                         new_objects.append(new_obj)
-                        all_new_objects.append(new_obj)  # Adicionar à lista global um por um
                         
                     # Select newly created objects
                     bpy.ops.object.select_all(action='DESELECT')
@@ -2248,7 +2246,6 @@ class GROUP_OT_quick_ungroup(Operator):
             
         # Desagrupar cada grupo selecionado
         ungrouped_count = 0
-        all_new_objects = []  # Lista para armazenar todos os novos objetos criados
         
         for active_obj in selected_group_objects:
             # Get the group modifier
@@ -2303,9 +2300,8 @@ class GROUP_OT_quick_ungroup(Operator):
                 # Apply transformations (group transformation + relative object position)
                 new_obj.matrix_world = group_matrix @ obj.matrix_world
                 
-                # Adicionar à lista temporária e à lista global
+                # Adicionar à lista temporária
                 group_new_objects.append(new_obj)
-                all_new_objects.append(new_obj)
                 
             # Verificar se existem outras instâncias deste grupo
             has_other_instances = False
@@ -2339,14 +2335,6 @@ class GROUP_OT_quick_ungroup(Operator):
                 bpy.data.collections.remove(bpy.data.collections.get(group_collection_name))
             
             ungrouped_count += 1
-        
-        # Select newly created objects after processing all groups
-        if all_new_objects:
-            bpy.ops.object.select_all(action='DESELECT')
-            for obj in all_new_objects:
-                obj.select_set(True)
-            context.view_layer.objects.active = all_new_objects[0]
-        
         if ungrouped_count > 0:
             self.report({'INFO'}, f"{ungrouped_count} grupos desagrupados com sucesso")
             return {'FINISHED'}
