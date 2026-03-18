@@ -5,24 +5,39 @@ from bpy.props import StringProperty, BoolProperty, EnumProperty, CollectionProp
 from mathutils import Vector, Matrix
 import os
 
-# Importar o sistema de gizmos para grupos
-try:
-    import gn_groups_gizmo
-except ImportError:
-    pass
+ADDON_MODULE = __package__ or __name__
 
-# Definir lista global para armazenar keymaps do addon
+try:
+    from . import gn_groups_gizmo
+except ImportError:
+    gn_groups_gizmo = None
+
 addon_keymaps = []
+
+
+class _DefaultPreferences:
+    use_separate_scene = False
+    show_group_gizmo = False
+
 
 bl_info = {
     "name": "GN Groups",
     "author": "Henrique Miranda",
-    "version": (2, 4, 1),
-    "blender": (2, 80, 0),
+    "version": (2, 5, 0),
+    "blender": (4, 2, 0),
     "location": "View3D > Object",
     "description": "Advanced grouping functionality for Blender",
     "category": "Object",
 }
+
+
+def get_addon_preferences(context=None):
+    context = context or bpy.context
+    addon = context.preferences.addons.get(ADDON_MODULE)
+    if addon:
+        return addon.preferences
+    return _DefaultPreferences()
+
 
 def load_node_group():
     # Get the path of the current script
@@ -39,7 +54,7 @@ def load_node_group():
     return data_to.node_groups[0]
 
 class GNGroupsPreferences(AddonPreferences):
-    bl_idname = __name__
+    bl_idname = ADDON_MODULE
 
     use_separate_scene: BoolProperty(
         name="Use Separate Scene",
@@ -47,14 +62,22 @@ class GNGroupsPreferences(AddonPreferences):
         default=False
     )
 
+    show_group_gizmo: BoolProperty(
+        name="Show Group Gizmo",
+        description="Display the bounding-box gizmo for selected GN Groups",
+        default=False
+    )
+
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "use_separate_scene")
+        layout.prop(self, "show_group_gizmo")
         layout.label(text="Note: Changing this setting will not affect existing groups")
+        layout.label(text="The gizmo is disabled by default for a cleaner viewport")
 
 def get_gngroups_storage(context, create=True):
     """Get or create the storage location for GN Groups based on preferences"""
-    preferences = context.preferences.addons[__name__].preferences
+    preferences = get_addon_preferences(context)
     
     if preferences.use_separate_scene:
         # Use separate scene method (legacy)
@@ -225,7 +248,7 @@ class GROUP_OT_create_group(Operator):
         
         # Apply the same visibility settings to the new collection as the parent collection
         # in collection mode (not separate scene mode)
-        preferences = context.preferences.addons[__name__].preferences
+        preferences = get_addon_preferences(context)
         if not preferences.use_separate_scene:
             new_collection.hide_viewport = groups_collection.hide_viewport
             new_collection.hide_render = groups_collection.hide_render
@@ -721,7 +744,7 @@ class GROUP_OT_toggle_edit_mode(Operator):
 
     def execute(self, context):
         # Check preferences to determine storage method
-        preferences = context.preferences.addons[__name__].preferences
+        preferences = get_addon_preferences(context)
         
         # Check if we're in local view mode
         is_in_local_view = False
@@ -1621,7 +1644,8 @@ class GROUP_OT_list_action(Operator):
                         bpy.ops.view3d.localview()
                         
                         # Resetar visibilidade das coleções
-                        if not context.preferences.addons[__name__].preferences.use_separate_scene:
+                        preferences = get_addon_preferences(context)
+                        if not preferences or not preferences.use_separate_scene:
                             # Reset visibility of GNGroups collection and all child collections
                             groups_collection = bpy.data.collections.get("GNGroups")
                             if groups_collection:
@@ -1654,7 +1678,7 @@ class GROUP_OT_list_action(Operator):
                     
                     # Agora editar o grupo
                     # Código adaptado do GROUP_OT_toggle_edit_mode
-                    preferences = context.preferences.addons[__name__].preferences
+                    preferences = get_addon_preferences(context)
                     group_name = group_obj.name
                     
                     # Find the GN modifier
@@ -1950,17 +1974,19 @@ def register():
         addon_keymaps.append((km, kmi))
     
     # Registrar os gizmos
-    try:
-        gn_groups_gizmo.register()
-    except Exception as e:
-        print(f"Erro ao registrar gizmos: {e}")
+    if gn_groups_gizmo is not None:
+        try:
+            gn_groups_gizmo.register()
+        except Exception as e:
+            print(f"Erro ao registrar gizmos: {e}")
 
 def unregister():
     # Desregistrar os gizmos
-    try:
-        gn_groups_gizmo.unregister()
-    except Exception as e:
-        print(f"Erro ao desregistrar gizmos: {e}")
+    if gn_groups_gizmo is not None:
+        try:
+            gn_groups_gizmo.unregister()
+        except Exception as e:
+            print(f"Erro ao desregistrar gizmos: {e}")
         
     for km, kmi in addon_keymaps:
         km.keymap_items.remove(kmi)
