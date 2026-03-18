@@ -1,10 +1,21 @@
 import bpy
-import bmesh
 from bpy.types import (
     Gizmo,
     GizmoGroup,
 )
 from mathutils import Vector, Matrix
+
+ADDON_MODULE = __package__
+
+
+def get_addon_preferences(context):
+    addon = context.preferences.addons.get(ADDON_MODULE) if ADDON_MODULE else None
+    return addon.preferences if addon else None
+
+
+def is_group_gizmo_enabled(context):
+    preferences = get_addon_preferences(context)
+    return bool(preferences and getattr(preferences, "show_group_gizmo", False))
 
 # Gera os vértices e arestas para uma forma de cantoneira em L
 # como sugerido pelo usuário
@@ -90,7 +101,9 @@ class GNGroupBoundingBoxGizmoGroup(GizmoGroup):
     
     @classmethod
     def poll(cls, context):
-        # Verificar se há pelo menos um objeto selecionado que é um grupo GN
+        if not is_group_gizmo_enabled(context):
+            return False
+
         if context.selected_objects:
             for obj in context.selected_objects:
                 if any(f"gng_" in mod.name for mod in obj.modifiers):
@@ -261,214 +274,21 @@ class GNGroupBoundingBoxGizmoGroup(GizmoGroup):
                     self.gizmos.remove(self.gizmos_dict[obj.name])
                     self.create_gizmo_for_group(obj)
 
-# Operador para desenhar diretamente o bounding box (como backup)
-class GNGroupBoundingBoxOperator(bpy.types.Operator):
-    bl_idname = "object.gn_group_draw_bbox"
-    bl_label = "Display Group Bounding Box"
-    
-    _handle = None
-    
-    @classmethod
-    def poll(cls, context):
-        return True
-    
-    def modal(self, context, event):
-        if context.area:
-            context.area.tag_redraw()
-            
-        return {'PASS_THROUGH'}
-    
-    def invoke(self, context, event):
-        args = (self, context)
-        self.__class__._handle = bpy.types.SpaceView3D.draw_handler_add(
-            self.draw_bbox_callback, args, 'WINDOW', 'POST_VIEW')
-        
-        context.window_manager.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
-    
-    def draw_bbox_callback(self, context):
-        """Desenhar o bounding box para todos os grupos selecionados"""
-        import gpu
-        from gpu_extras.batch import batch_for_shader
-        
-        # Shader básico
-        shader = gpu.shader.from_builtin('3D_UNIFORM_COLOR')
-        
-        for obj in context.selected_objects:
-            if any(f"gng_" in mod.name for mod in obj.modifiers):
-                self.draw_group_bbox(context, obj, shader)
-    
-    def draw_group_bbox(self, context, group_obj, shader):
-        """Desenhar o bounding box para um grupo específico"""
-        # Inicializar com valores extremos
-        bbox_min = Vector((float('inf'), float('inf'), float('inf')))
-        bbox_max = Vector((float('-inf'), float('-inf'), float('-inf')))
-        
-        # Obter a coleção do grupo
-        group_collection = None
-        for mod in group_obj.modifiers:
-            if f"gng_" in mod.name and mod.type == 'NODES':
-                for input in mod.node_group.interface.items_tree:
-                    if input.bl_socket_idname == 'NodeSocketCollection':
-                        group_collection = mod[input.identifier]
-                        break
-                if group_collection:
-                    break
-        
-        if not group_collection:
-            # Usar o bounding box do próprio objeto
-            bbox_corners = [group_obj.matrix_world @ Vector(corner) for corner in group_obj.bound_box]
-            bbox_min = Vector((min(c.x for c in bbox_corners), min(c.y for c in bbox_corners), min(c.z for c in bbox_corners)))
-            bbox_max = Vector((max(c.x for c in bbox_corners), max(c.y for c in bbox_corners), max(c.z for c in bbox_corners)))
-        else:
-            # Processar a coleção recursivamente
-            self.process_collection_for_bbox(context, group_collection, group_obj.matrix_world, bbox_min, bbox_max)
-            
-            # Se não encontrou objetos válidos, usar o bounding box do próprio objeto
-            if bbox_min.x == float('inf'):
-                bbox_corners = [group_obj.matrix_world @ Vector(corner) for corner in group_obj.bound_box]
-                bbox_min = Vector((min(c.x for c in bbox_corners), min(c.y for c in bbox_corners), min(c.z for c in bbox_corners)))
-                bbox_max = Vector((max(c.x for c in bbox_corners), max(c.y for c in bbox_corners), max(c.z for c in bbox_corners)))
-        
-        # Expandir ligeiramente o bounding box
-        expand_factor = 0.05
-        bbox_size = Vector((
-            max(0.01, bbox_max[0] - bbox_min[0]),
-            max(0.01, bbox_max[1] - bbox_min[1]),
-            max(0.01, bbox_max[2] - bbox_min[2])
-        ))
-        
-        expand = Vector((
-            bbox_size[0] * expand_factor,
-            bbox_size[1] * expand_factor,
-            bbox_size[2] * expand_factor
-        ))
-        
-        bbox_min -= expand
-        bbox_max += expand
-        
-        # Desenhar as cantoneiras em vez do wireframe completo
-        vertices = []
-        
-        # Cantos do bounding box
-        corners = [
-            Vector((bbox_min[0], bbox_min[1], bbox_min[2])),
-            Vector((bbox_max[0], bbox_min[1], bbox_min[2])),
-            Vector((bbox_min[0], bbox_max[1], bbox_min[2])),
-            Vector((bbox_max[0], bbox_max[1], bbox_min[2])),
-            Vector((bbox_min[0], bbox_min[1], bbox_max[2])),
-            Vector((bbox_max[0], bbox_min[1], bbox_max[2])),
-            Vector((bbox_min[0], bbox_max[1], bbox_max[2])),
-            Vector((bbox_max[0], bbox_max[1], bbox_max[2])),
-        ]
-        
-        # Função para calcular o offset para "dentro" do cubo
-        def offset(value, is_min):
-            edge_length = min(bbox_size) * 0.3
-            if is_min:
-                return edge_length
-            else:
-                return -edge_length
-        
-        # Para cada canto, criar 3 arestas formando um L
-        for i, corner in enumerate(corners):
-            # Determine se cada coordenada é mínima ou máxima
-            is_min_x = corner.x == bbox_min.x
-            is_min_y = corner.y == bbox_min.y
-            is_min_z = corner.z == bbox_min.z
-            
-            # Criar os vértices das pontas dos "braços" do L
-            vx = Vector((
-                corner.x + offset(corner.x, is_min_x),
-                corner.y,
-                corner.z
-            ))
-            
-            vy = Vector((
-                corner.x,
-                corner.y + offset(corner.y, is_min_y),
-                corner.z
-            ))
-            
-            vz = Vector((
-                corner.x,
-                corner.y,
-                corner.z + offset(corner.z, is_min_z)
-            ))
-            
-            # Adicionar as arestas do L
-            vertices.extend([corner, vx])
-            vertices.extend([corner, vy])
-            vertices.extend([corner, vz])
-        
-        # Desenhar as linhas
-        batch = batch_for_shader(shader, 'LINES', {"pos": vertices})
-        
-        # Cor magenta
-        color = (1.0, 0.0, 1.0, 1.0)
-        
-        shader.bind()
-        shader.uniform_float("color", color)
-        batch.draw(shader)
-    
-    def process_collection_for_bbox(self, context, collection, parent_matrix, bbox_min, bbox_max):
-        """Processa todos os objetos de uma coleção para o cálculo do bbox, incluindo grupos aninhados"""
-        for obj in collection.objects:
-            # Se for um grupo aninhado
-            if any(f"gng_" in mod.name for mod in obj.modifiers):
-                # Obter a coleção do grupo aninhado
-                nested_collection = None
-                for mod in obj.modifiers:
-                    if f"gng_" in mod.name and mod.type == 'NODES':
-                        for input in mod.node_group.interface.items_tree:
-                            if input.bl_socket_idname == 'NodeSocketCollection':
-                                nested_collection = mod[input.identifier]
-                                break
-                        if nested_collection:
-                            break
-                
-                if nested_collection:
-                    # Calcular a matriz combinada para o grupo aninhado
-                    combined_matrix = parent_matrix @ obj.matrix_world
-                    # Processar recursivamente os objetos do grupo aninhado
-                    self.process_collection_for_bbox(context, nested_collection, combined_matrix, bbox_min, bbox_max)
-            
-            # Para objetos regulares
-            elif hasattr(obj, 'bound_box'):
-                # Transformação combinada
-                combined_matrix = parent_matrix @ obj.matrix_world
-                
-                # Atualizar o bounding box
-                for corner in obj.bound_box:
-                    world_corner = combined_matrix @ Vector(corner)
-                    
-                    # Atualizar mínimos e máximos
-                    bbox_min.x = min(bbox_min.x, world_corner.x)
-                    bbox_min.y = min(bbox_min.y, world_corner.y)
-                    bbox_min.z = min(bbox_min.z, world_corner.z)
-                    
-                    bbox_max.x = max(bbox_max.x, world_corner.x)
-                    bbox_max.y = max(bbox_max.y, world_corner.y)
-                    bbox_max.z = max(bbox_max.z, world_corner.z)
+
 
 
 classes = (
     GNGroupBoundingBoxGizmo,
     GNGroupBoundingBoxGizmoGroup,
-    GNGroupBoundingBoxOperator,
 )
+
 
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-    # Iniciar o operador de desenho
-    bpy.ops.object.gn_group_draw_bbox('INVOKE_DEFAULT')
+
 
 def unregister():
-    # Remover o handler de desenho
-    if GNGroupBoundingBoxOperator._handle:
-        bpy.types.SpaceView3D.draw_handler_remove(GNGroupBoundingBoxOperator._handle, 'WINDOW')
-    
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 

@@ -1,0 +1,11 @@
+schema_version = "1.0.0"
+id = "gn_groups"
+version = "2.5.0"
+name = "GN Groups"
+tagline = "Geometry Nodes-powered object grouping with nested editing"
+maintainer = "Henrique Miranda"
+type = "add-on"
+website = "https://github.com/henriquemiranda/gn_groups"
+tags = ["Object"]
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
