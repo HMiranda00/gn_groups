@@ -1137,8 +1137,9 @@ def register_active_group_index():
             default=0
         )
     
-    # Track which groups are expanded in the hierarchy view using a different approach
-    # In Blender 4.4, BoolVectorProperty has new restrictions
+    # Individual group_expanded_0…63 properties store whether a group is expanded
+    # in the hierarchy view. group_expanded_states itself is only a sentinel so
+    # this block runs once.
     if not hasattr(bpy.types.Scene, "group_expanded_states"):
         # Criar propriedade individual para cada grupo (até 64)
         for i in range(64):
@@ -1146,6 +1147,7 @@ def register_active_group_index():
                 name=f"Group {i} Expanded",
                 default=False
             ))
+        bpy.types.Scene.group_expanded_states = True
 
 def unregister_active_group_index():
     if hasattr(bpy.types.Scene, "active_group_index"):
