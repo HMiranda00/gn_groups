@@ -7,7 +7,8 @@ GN Groups is a Blender extension that creates editable object groups backed by G
 This repository is now structured as a Blender **Extension** package instead of a legacy single-file add-on:
 
 - `blender_manifest.toml` provides the extension metadata required by Blender's Extensions system.
-- `__init__.py` contains the extension entry point and operator/panel registration.
+- `__init__.py` is the lightweight extension entry point required by Blender's Extensions system.
+- `GN Groups.py` keeps the main implementation so existing development history remains easier to merge.
 - `gn_groups_gizmo.py` contains the optional viewport gizmo implementation.
 - `group_node_tree.blend` stores the Geometry Nodes group used by generated instances.
 
